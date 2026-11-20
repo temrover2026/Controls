@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+from smbus2 import SMBus
+import rclpy
+from rclpy.node import Node
+
+#Ros 2 imports
+from sensor_msgs.msg import Imu, MagneticField     # Import the IMU message type
+from icm20948 import ICM20948       # Use the ICM-20948 library to read the IMU data
+
+# personal library imports
+from imu_processing.imu_pubplot_func import ImuPubPlotFuncs
+
+# TO TURN PLOTS ON : IN TERMINAL RUN
+# ros2 run imu_processing imu_raw_live --ros-args -p enable_plot:=true
+
+class imu_processing_raw(Node, ImuPubPlotFuncs):
+
+    def __init__(self):
+        super().__init__("imu_raw_live")
+
+        # Create ICM-20948
+        # self.imu = ICM20948()
+        self.declare_parameter('i2c_bus', 2)
+        self.declare_parameter('i2c_addr', 0x68)
+        bus = self.get_parameter('i2c_bus').value
+        addr = self.get_parameter('i2c_addr').value
+        self.imu = ICM20948(i2c_addr=addr, i2c_bus=SMBus(bus))
+
+
+        self.gyr_pub = self.create_publisher(Imu,"/imu/gyr_raw",10)      # ROS 2 publisher
+        self.mag_pub = self.create_publisher(MagneticField, "/imu/mag_raw", 10)
+        # Publish at 100 Hz while data is collected at 125hz
+        self.timer = self.create_timer(0.01, self.publish_imu)
+
+        self.print_count = 0
+
+        self.frame_id = "imu_link"      # Required by ImuPubPlotFuncs.read_imu_data() for message headers
+
+        self.start_time = self.get_clock().now()
+        self.plots = []
+        self.declare_parameter('enable_plot', False)
+        if self.get_parameter('enable_plot').value:
+            self.create_plot(type="Raw")  # Bench use only: plotting blocks the publish timer
+        self.get_logger().info("ICM-20948 IMU publisher started")
+
+    def publish_imu(self):
+
+        imu_msg, mag_msg = self.read_imu_data()  # Read the IMU data
+
+        # # We are not calculating orientation yet
+        imu_msg.orientation_covariance[0] = -1.0
+
+        self.gyr_pub.publish(imu_msg)
+        self.mag_pub.publish(mag_msg)
+
+        a_raw = imu_msg.linear_acceleration
+        w_raw = imu_msg.angular_velocity
+        m_raw = mag_msg.magnetic_field
+
+        self.updatenprint_plots(a_raw, w_raw, m_raw, type="Raw")  # Update the plots and print the data every 50 samples
+
+
+def main(args=None):
+
+    # Initialise ROS 2
+    rclpy.init(args=args)
+
+    # Create node
+    node = imu_processing_raw()
+
+    try:
+        # Keep node running
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+
+    finally:
+        # Clean up
+        node.close_plots()
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
